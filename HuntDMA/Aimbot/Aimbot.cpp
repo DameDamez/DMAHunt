@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <vector>
 #include <utility>
+#include <atomic>
 #include "Aimbot.h"
 #include "PlayerEsp.h"
 #include "Globals.h"
@@ -256,6 +257,7 @@ static std::shared_ptr<CheatFunction> UpdateTarget = std::make_shared<CheatFunct
 // =============================================================================
 
 bool AimKeyDown = false;
+static bool WaitingForKeyRelease = false;  // LockOnKill: blocks new target until key released
 
 std::shared_ptr<CheatFunction> UpdateAimKey = std::make_shared<CheatFunction>(50, [] {
 	if (!EnvironmentInstance) return;
@@ -305,30 +307,112 @@ static void ApplyAxisUnlock(float& x, float& y, float distToTarget)
 
 std::chrono::system_clock::time_point KmboxStart;
 
+// ── Aimbot diagnostics helpers ────────────────────────────────────────────────
+// Rate-limit each log category to avoid spamming the log file.
+// Each counter fires at most once every DIAG_INTERVAL_MS milliseconds.
+namespace AimbotDiag
+{
+	static constexpr int DIAG_INTERVAL_MS = 2000; // log at most once per 2 s per category
+
+	struct RateLimiter {
+		std::chrono::steady_clock::time_point last{};
+		bool ShouldLog() {
+			auto now = std::chrono::steady_clock::now();
+			if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count() >= DIAG_INTERVAL_MS) {
+				last = now;
+				return true;
+			}
+			return false;
+		}
+	};
+
+	static RateLimiter rlNoKmbox;
+	static RateLimiter rlKeyUp;
+	static RateLimiter rlNoTarget;
+	static RateLimiter rlZeroPos;
+	static RateLimiter rlDead;
+	static RateLimiter rlScreenZero;
+	static RateLimiter rlOutsideFov;
+	static RateLimiter rlMove;
+	static RateLimiter rlKmboxState;
+
+	// Periodic heartbeat: fires every DIAG_INTERVAL_MS when aimbot IS active
+	static RateLimiter rlHeartbeat;
+	// Counts moves sent per interval
+	static std::atomic<int> movesThisInterval{0};
+}
+
 void Aimbot()
 {
 	UpdateAimKey->Execute();
-	if (!kmbox::connected || !AimKeyDown)
+
+	// ── Periodic kmbox connection heartbeat ──────────────────────────────────
+	if (AimbotDiag::rlKmboxState.ShouldLog())
+		LOG_INFO("[Aimbot] kmbox.connected=%d  AimKeyDown=%d  Enable=%d",
+		         (int)kmbox::connected, (int)AimKeyDown, (int)Configs.Aimbot.Enable);
+
+	if (!kmbox::connected)
 	{
+		if (AimbotDiag::rlNoKmbox.ShouldLog())
+			LOG_ERROR("[Aimbot] BLOCKED — kmbox not connected");
 		AimbotTarget = nullptr;
 		return;
 	}
+
+	if (!AimKeyDown)
+	{
+		// Key released — clear LockOnKill wait state
+		WaitingForKeyRelease = false;
+		AimbotTarget = nullptr;
+		return;
+	}
+
+	// LockOnKill: intercept BEFORE UpdateTarget runs
+	// Must check here so UpdateTarget can't silently swap to a live target2
+	// in the same frame that target1 dies
+	if (Configs.Aimbot.LockOnKill && AimbotTarget != nullptr)
+	{
+		bool isDead = (AimbotTarget->GetType() == EntityType::DeadPlayer ||
+		               AimbotTarget->GetHealth().current_hp == 0);
+		if (isDead)
+		{
+			if (AimbotDiag::rlDead.ShouldLog())
+				LOG_INFO("[Aimbot] LockOnKill — target died, waiting for key release");
+			WaitingForKeyRelease = true;
+			AimbotTarget = nullptr;
+			return;
+		}
+	}
+
+	// LockOnKill: block new target acquisition until key is released & re-pressed
+	if (Configs.Aimbot.LockOnKill && WaitingForKeyRelease)
+		return;
 
 	// Rate-limited target selection (50 ms)
 	UpdateTarget->Execute();
 
-	if (!AimbotTarget) return;
+	if (!AimbotTarget)
+	{
+		if (AimbotDiag::rlNoTarget.ShouldLog())
+			LOG_INFO("[Aimbot] BLOCKED — no target in FOV (%d px)", Configs.Aimbot.FOV);
+		return;
+	}
+
 	if (AimbotTarget->GetPosition() == Vector3::Zero())
 	{
+		if (AimbotDiag::rlZeroPos.ShouldLog())
+			LOG_ERROR("[Aimbot] BLOCKED — target has zero position (stale entity)");
 		AimbotTarget = nullptr;
 		return;
 	}
 
-	// Drop target immediately if dead (don't wait for UpdateTarget 50ms cycle)
+	// Drop target immediately if dead — also handles IgnoreDead without LockOnKill
 	if (Configs.Aimbot.IgnoreDead &&
 	    (AimbotTarget->GetType() == EntityType::DeadPlayer ||
 	     AimbotTarget->GetHealth().current_hp == 0))
 	{
+		if (AimbotDiag::rlDead.ShouldLog())
+			LOG_INFO("[Aimbot] BLOCKED — target dead (hp=%d)", AimbotTarget->GetHealth().current_hp);
 		AimbotTarget = nullptr;
 		return;
 	}
@@ -337,14 +421,46 @@ void Aimbot()
 	Vector2 screenpos    = GetPredictedHeadScreenPosition(AimbotTarget);
 	Vector2 Centerscreen = GetCenterOfScreen();
 
-	if (screenpos == Vector2::Zero()) { AimbotTarget = nullptr; return; }
-	if (Vector2::Distance(screenpos, Centerscreen) > Configs.Aimbot.FOV) return;
+	if (screenpos == Vector2::Zero())
+	{
+		if (AimbotDiag::rlScreenZero.ShouldLog())
+			LOG_ERROR("[Aimbot] BLOCKED — WorldToScreen returned zero (camera invalid?)");
+		AimbotTarget = nullptr;
+		return;
+	}
+
+	float distScreen = Vector2::Distance(screenpos, Centerscreen);
+	if (distScreen > Configs.Aimbot.FOV)
+	{
+		if (AimbotDiag::rlOutsideFov.ShouldLog())
+			LOG_INFO("[Aimbot] BLOCKED — target outside FOV (dist=%.1f  fov=%d)", distScreen, Configs.Aimbot.FOV);
+		return;
+	}
+
+	// ── Heartbeat: aimbot is actively tracking ───────────────────────────────
+	if (AimbotDiag::rlHeartbeat.ShouldLog())
+	{
+		float worldDist = Vector3::Distance(CameraInstance->GetPosition(), AimbotTarget->GetPosition());
+		LOG_INFO("[Aimbot] ACTIVE — scrDist=%.1f  worldDist=%.1fm  moves/2s=%d  kmbox=%d",
+		         distScreen, worldDist,
+		         AimbotDiag::movesThisInterval.load(),
+		         (int)kmbox::connected);
+		AimbotDiag::movesThisInterval = 0;
+	}
 
 	float x = screenpos.x - Centerscreen.x;
 	float y = screenpos.y - Centerscreen.y;
 
 	// ── Smoothing (S-curve zones) ─────────────────────────────────────────
-	float distToTarget  = std::sqrt(x * x + y * y);
+	float dist2 = x * x + y * y;
+	if (!std::isfinite(dist2))
+	{
+		// screenpos contains NaN/Inf — WorldToScreen returned garbage, skip this frame
+		LOG_ERROR("[Aimbot] NaN screenpos detected (x=%.2f y=%.2f) — skipping frame", x, y);
+		AimbotTarget = nullptr;
+		return;
+	}
+	float distToTarget  = std::sqrt(dist2);
 	float smoothing     = std::max(Configs.Aimbot.Smoothing, 1.0f);
 	const float LOCK_PX = 20.0f;
 
@@ -400,7 +516,10 @@ void Aimbot()
 			residualY = targetY - moveY;
 
 			if (moveX != 0 || moveY != 0)
+			{
 				kmbox::move(moveX, moveY);
+				AimbotDiag::movesThisInterval++;
+			}
 		}
 
 		KmboxStart = std::chrono::system_clock::now();

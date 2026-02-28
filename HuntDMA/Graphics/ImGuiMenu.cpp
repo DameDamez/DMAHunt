@@ -1297,6 +1297,13 @@ void ImGuiMenu::RenderAimbotTab() {
     ImGui::Checkbox("Ignore Dead", &Configs.Aimbot.IgnoreDead);
     ImGui::SameLine(); HelpMarker("Skip dead/downed players (DeadPlayer type or HP = 0)");
 
+    ImGui::Checkbox("Lock On Kill", &Configs.Aimbot.LockOnKill);
+    ImGui::SameLine(); HelpMarker(
+        "When enabled: after killing a target, aimbot stops and\n"
+        "waits for you to release and re-press the aim key\n"
+        "before locking onto the next enemy."
+    );
+
     if (ImGui::Button("Test Connection (Square Move)")) {
         kmbox::test_move();
     }

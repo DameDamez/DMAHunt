@@ -17,6 +17,7 @@ public:
     int         Aimkey          = 5;       // VK code (5 = RMB)
     float       HeadOffsetZ     = 0.0f;    // vertical bone-head offset (meters, +=up, -=down)
     bool        IgnoreDead      = true;    // skip dead/downed players in target selection
+    bool        LockOnKill      = false;   // require key release before targeting next enemy
 
     // ── KMBox ─────────────────────────────────────────────────────────────
     int         KmboxBaudRate   = 115200;
@@ -83,6 +84,7 @@ public:
         j[ConfigName][LIT("Aimkey")]            = Aimkey;
         j[ConfigName][LIT("HeadOffsetZ")]       = HeadOffsetZ;
         j[ConfigName][LIT("IgnoreDead")]         = IgnoreDead;
+        j[ConfigName][LIT("LockOnKill")]         = LockOnKill;
         // KMBox
         j[ConfigName][LIT("KmboxBaudRate")]     = KmboxBaudRate;
         j[ConfigName][LIT("KmboxDeviceType")]   = KmboxDeviceType;
@@ -121,10 +123,11 @@ public:
         if (c.contains(LIT("MaxDistance")))     MaxDistance    = c[LIT("MaxDistance")];
         if (c.contains(LIT("TargetPlayers")))   TargetPlayers  = c[LIT("TargetPlayers")];
         if (c.contains(LIT("Priority")))        Priority       = c[LIT("Priority")];
-        if (c.contains(LIT("FOV")))             FOV            = c[LIT("FOV")];
+        if (c.contains(LIT("FOV")))             { FOV = c[LIT("FOV")]; if (FOV < 1) FOV = 200; }
         if (c.contains(LIT("Aimkey")))          Aimkey         = c[LIT("Aimkey")];
         if (c.contains(LIT("HeadOffsetZ")))     HeadOffsetZ    = c[LIT("HeadOffsetZ")];
         if (c.contains(LIT("IgnoreDead")))       IgnoreDead     = c[LIT("IgnoreDead")];
+        if (c.contains(LIT("LockOnKill")))       LockOnKill     = c[LIT("LockOnKill")];
         // KMBox
         if (c.contains(LIT("KmboxBaudRate")))   KmboxBaudRate  = c[LIT("KmboxBaudRate")];
         if (c.contains(LIT("KmboxDeviceType"))) KmboxDeviceType= c[LIT("KmboxDeviceType")];
