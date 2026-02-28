@@ -117,9 +117,9 @@ static Vector2 GetPredictedHeadScreenPosition(std::shared_ptr<WorldEntity> entit
 		{
 			float travelTime = distance / bulletSpeed;
 
-			// ── Movement lead ──────────────────────────────────────────────
-			float dragFactor = std::max(1.0f - drag, 0.1f);
-			Vector3 offset   = entity->Velocity * (travelTime * Configs.Aimbot.PredictionScale * dragFactor);
+			// ── Movement lead (disabled — shifts aim too far when enemy moves) ──
+			//float dragFactor = std::max(1.0f - drag, 0.1f);
+			//Vector3 offset   = entity->Velocity * (travelTime * Configs.Aimbot.PredictionScale * dragFactor);
 
 			// ── Bullet drop  s = 0.5 * g * t^2 * dropMult ────────────────
 			float gravity = 9.81f * Configs.Aimbot.GravityScale;
@@ -129,9 +129,7 @@ static Vector2 GetPredictedHeadScreenPosition(std::shared_ptr<WorldEntity> entit
 			if (distance > 300.0f)
 				drop *= 1.3f;
 
-			offset.z += drop;
-
-			headPos = headPos + offset;
+			headPos.z += drop;
 		}
 	}
 
