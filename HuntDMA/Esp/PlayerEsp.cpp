@@ -320,8 +320,7 @@ void DrawPlayersEsp() {
       // ── Draw Head Circle (independent, uses bone head position) ──
       if (Configs.Player.DrawHead &&
           ent->Render.Type != EntityType::FriendlyPlayer && !isDead) {
-        Vector3 boneHeadWorld = ent->Render.BonePositions[0]; // bone 0 = head
-        boneHeadWorld.z += Configs.Aimbot.HeadOffsetZ;
+        const Vector3& boneHeadWorld = ent->Render.BonePositions[0]; // bone 0 = head
         if (!boneHeadWorld.IsZero()) {
           Vector2 boneHeadScreen = CameraInstance->RenderWorldToScreen(boneHeadWorld, false);
           if (!boneHeadScreen.IsZero()) {
